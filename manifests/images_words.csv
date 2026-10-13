@@ -1,0 +1,19 @@
+image,expected_text,category,evaluate_spelling,is_correct,expected_correction,expected_final,notes
+BOTTIGLIA.png,BOTTIGLIA,italian_correct,true,true,BOTTIGLIA,BOTTIGLIA,
+CARAMELLA.png,CARAMELLA,italian_correct,true,true,CARAMELLA,CARAMELLA,
+CASA.png,CASA,italian_correct,true,true,CASA,CASA,
+CHIAVE.png,CHIAVE,italian_correct,true,true,CHIAVE,CHIAVE,
+CUSTODIA.png,CUSTODIA,italian_correct,true,true,CUSTODIA,CUSTODIA,
+Gato.png,Gato,foreign_word,false,true,,Gato,Spanish word; OCR target only
+PORTO.png,PORTO,italian_correct,true,true,PORTO,PORTO,
+QUORE.png,QUORE,italian_misspelling,true,false,cuore,QUORE,Intentional spelling error; keep OCR text in conservative mode
+VENTOLLA.png,VENTOLLA,italian_misspelling,true,false,ventola,VENTOLLA,Intentional spelling error; keep OCR text in conservative mode
+agenda.png,agenda,italian_correct,true,true,agenda,agenda,
+cuaderno.png,cuaderno,foreign_word,false,true,,cuaderno,Spanish word; OCR target only
+diario.png,diario,italian_correct,true,true,diario,diario,
+gatto.png,gatto,italian_correct,true,true,gatto,gatto,
+home.png,home,foreign_or_loanword,false,true,,home,OCR target only
+scheda.png,scheda,italian_correct,true,true,scheda,scheda,
+serpente.png,serpente,italian_correct,true,true,serpente,serpente,
+telefono.png,telefono,italian_correct,true,true,telefono,telefono,
+tesera.png,tesera,italian_misspelling,true,false,tessera,tesera,Intentional spelling error; keep OCR text in conservative mode

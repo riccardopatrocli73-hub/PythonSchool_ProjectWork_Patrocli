@@ -1,0 +1,58 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+
+      - name: Install CPU runtime and build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-runtime.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build portable Windows application
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --name HandwrittenTextOCR `
+            --onedir `
+            --windowed `
+            --clean `
+            --noconfirm `
+            --exclude-module torchvision `
+            --exclude-module matplotlib `
+            --add-data "models/best_ch_cnn.pt;models" `
+            --add-data "models/best_ch_cnn_local_words.pt;models" `
+            --add-data "data/dictionaries/it_frequency.txt;data/dictionaries" `
+            --add-data "data/dictionaries/en_frequency.txt;data/dictionaries" `
+            --add-data "data/dictionaries/it_bigrams.txt;data/dictionaries" `
+            --add-data "data/dictionaries/en_bigrams.txt;data/dictionaries" `
+            src/qt_app.py
+
+      - name: Upload portable application
+        uses: actions/upload-artifact@v7
+        with:
+          name: HandwrittenTextOCR-Windows
+          path: dist/HandwrittenTextOCR/
+          if-no-files-found: error
+          retention-days: 14

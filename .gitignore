@@ -1,0 +1,23 @@
+.project_venv/
+.python_project_venv/
+.venv/
+.venv-win/
+venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Dataset scaricati o generati localmente
+data/*
+!data/dictionaries/
+data/dictionaries/*
+!data/dictionaries/it_frequency.txt
+!data/dictionaries/en_frequency.txt
+!data/dictionaries/it_bigrams.txt
+!data/dictionaries/en_bigrams.txt
+!data/dictionaries/DATA_SOURCES.md
+images
+GitHub_key
+outputs
+models/*_local_words.pt
+!models/best_ch_cnn_local_words.pt
