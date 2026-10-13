@@ -21,3 +21,7 @@ GitHub_key
 outputs
 models/*_local_words.pt
 !models/best_ch_cnn_local_words.pt
+
+# Artefatti PyInstaller
+build/
+dist/
