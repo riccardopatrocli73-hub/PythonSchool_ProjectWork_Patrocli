@@ -1,9 +1,9 @@
-""" Phrase-level language selection and conservative contextual scoring. """
+"""Phrase-level language selection and conservative contextual scoring."""
 
 import math
 from dataclasses import replace
 
-from src.spell_correct import normalize_word
+from src.spell_correct import normalize_word, word_edit_distance
 
 # Costants used to avoid aggressive corrections
 CONTEXTUAL_CONFIDENCE_THRESHOLD = 0.85
@@ -13,6 +13,35 @@ CONTEXTUAL_BIGRAM_WEIGHT = 1.25
 CONTEXTUAL_FREQUENCY_WEIGHT = 0.20
 CONTEXTUAL_SUGGESTION_LIMIT = 25
 CONTEXTUAL_SHORT_WORD_LENGTH = 4
+CONTEXTUAL_BEAM_WIDTH = 50
+
+
+def _phrase_language(word_results, language_correctors):
+    """Prefer exact, unambiguous words over guesses from misspelled words."""
+    votes = {}
+    for result in word_results:
+        word = normalize_word(result.raw_word)
+        matches = [
+            item["name"]
+            for item in language_correctors
+            if word in item["corrector"].engine.words
+        ]
+        if len(matches) == 1:
+            votes[matches[0]] = votes.get(matches[0], 0) + 1
+    ranked = sorted(votes, key=votes.get, reverse=True)
+    if ranked and (len(ranked) == 1 or votes[ranked[0]] > votes[ranked[1]]):
+        if votes[ranked[0]] >= 2 or (len(ranked) == 1 and len(word_results) >= 3):
+            return ranked[0]
+    # Ambiguous dictionary matches must not decide the phrase language.
+    if votes:
+        return None
+    unambiguous = [
+        result
+        for result in word_results
+        if " (also found in " not in result.detected_language
+    ]
+    return select_dominant_language(unambiguous)
+
 
 # This funcion select the language of the phrase
 def select_dominant_language(word_results):
@@ -42,9 +71,10 @@ def select_dominant_language(word_results):
 
     return ranked[0][0]
 
+
 # This function takes previous or next word if on the same line
 def _same_line_neighbour(word_results, index, offset):
-    neighbour_index = index + offset  
+    neighbour_index = index + offset
 
     if neighbour_index < 0 or neighbour_index >= len(word_results):
         return None
@@ -60,6 +90,7 @@ def _same_line_neighbour(word_results, index, offset):
 
     return word_results[neighbour_index].final_word
 
+
 # This function decides if a word has to be changed based on the context
 def choose_contextual_suggestion(
     raw_word,
@@ -69,7 +100,7 @@ def choose_contextual_suggestion(
     next_word=None,
     language_model=None,
 ):
-    """ Choose a safer alternative for an uncertain valid dictionary word. """
+    """Choose a safer alternative for an uncertain valid dictionary word."""
 
     normalized_raw = normalize_word(raw_word)
 
@@ -171,6 +202,7 @@ def choose_contextual_suggestion(
 
     return best_choice
 
+
 # This function applies the previous logic to the whole phrase
 def apply_phrase_context(
     word_results,
@@ -178,12 +210,15 @@ def apply_phrase_context(
     language_correctors,
     bigram_models=None,
 ):
-    """ Apply language-consistent corrections to uncertain valid words. """
+    """Apply language-consistent corrections to uncertain valid words."""
 
     if len(word_results) < 2:
         return word_results
 
-    dominant_language = select_dominant_language(word_results)
+    if len(word_results) != len(ocr_candidate_groups):
+        raise ValueError("Each word requires its own OCR candidate group")
+
+    dominant_language = _phrase_language(word_results, language_correctors)
 
     if dominant_language is None:
         return word_results
@@ -197,14 +232,21 @@ def apply_phrase_context(
     if language is None:
         return word_results
 
-    contextual_results = []
+    options = []
     language_model = (bigram_models or {}).get(dominant_language)
 
     for index, (result, ocr_candidates) in enumerate(
         zip(word_results, ocr_candidate_groups)
     ):
-        if result.spelling_status != "correct":
-            contextual_results.append(result)
+        normalized_raw = normalize_word(result.raw_word)
+        exact_here = normalized_raw in language["corrector"].engine.words
+        exact_elsewhere = any(
+            normalized_raw in item["corrector"].engine.words
+            for item in language_correctors
+            if item["name"] != dominant_language
+        )
+        if exact_elsewhere and not exact_here:
+            options.append([(result, 0.0)])
             continue
 
         correction = language["corrector"].correct(
@@ -212,34 +254,87 @@ def apply_phrase_context(
             ocr_candidates,
             suggestion_limit=CONTEXTUAL_SUGGESTION_LIMIT,
         )
-        contextual_suggestion = choose_contextual_suggestion(
-            result.raw_word,
-            result.character_predictions,
-            correction.suggestions,
-            previous_word=_same_line_neighbour(word_results, index, -1),
-            next_word=_same_line_neighbour(word_results, index, 1),
-            language_model=language_model,
-        )
+        if exact_here:
+            # Keep the existing protections for valid, confident words.
+            choice = choose_contextual_suggestion(
+                result.raw_word,
+                result.character_predictions,
+                correction.suggestions,
+                previous_word=_same_line_neighbour(word_results, index, -1),
+                next_word=_same_line_neighbour(word_results, index, 1),
+                language_model=language_model,
+            )
+            if choice is None:
+                options.append(
+                    [(replace(result, detected_language=dominant_language), 0.0)]
+                )
+                continue
+            suggestions = [choice]
+        else:
+            # Invalid words can need insertions/deletions as well as substitutions.
+            suggestions = [
+                suggestion
+                for suggestion in correction.suggestions
+                if language["corrector"]._is_reliable(suggestion, normalized_raw)
+                and (
+                    suggestion.edit_distance == 0
+                    or word_edit_distance(
+                        normalized_raw, normalize_word(suggestion.word)
+                    )
+                    <= language["corrector"].max_edit_distance
+                )
+            ]
 
-        if contextual_suggestion is None:
-            contextual_results.append(result)
+        if not suggestions:
+            options.append([(result, 0.0)])
             continue
 
-        suggestion_words = [contextual_suggestion.word]
-        suggestion_words.extend(
-            suggestion.word
-            for suggestion in correction.suggestions
-            if suggestion.word != contextual_suggestion.word
-        )
-        contextual_results.append(
-            replace(
+        word_options = []
+        for suggestion in suggestions:
+            suggestion_words = [suggestion.word] + [
+                item.word
+                for item in correction.suggestions
+                if item.word != suggestion.word
+            ]
+            revised = replace(
                 result,
-                final_word=contextual_suggestion.word,
+                final_word=suggestion.word,
                 detected_language=dominant_language,
                 spelling_status="possible error",
-                suggested_correction=contextual_suggestion.word,
+                suggested_correction=suggestion.word,
                 suggestions=suggestion_words[:3],
             )
-        )
+            word_options.append(
+                (
+                    revised,
+                    language["corrector"]._ranking_score(suggestion, normalized_raw),
+                )
+            )
+        options.append(word_options)
 
-    return contextual_results
+    # Decode together so a neighbour's revised spelling contributes immediately.
+    # Each bigram is counted once and never across a line boundary.
+    beams = [(0.0, [])]
+    for word_options in options:
+        expanded = []
+        for score, chosen in beams:
+            for result, word_score in word_options:
+                transition = 0.0
+                if chosen and language_model is not None:
+                    previous = chosen[-1]
+                    if (
+                        previous.character_predictions
+                        and result.character_predictions
+                        and previous.character_predictions[0].line_index
+                        == result.character_predictions[0].line_index
+                    ):
+                        transition = CONTEXTUAL_BIGRAM_WEIGHT * math.log1p(
+                            language_model.pair_count(
+                                previous.final_word, result.final_word
+                            )
+                        )
+                expanded.append((score + word_score + transition, chosen + [result]))
+        expanded.sort(key=lambda item: item[0], reverse=True)
+        beams = expanded[:CONTEXTUAL_BEAM_WIDTH]
+
+    return beams[0][1]

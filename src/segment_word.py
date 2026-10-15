@@ -10,16 +10,18 @@ from dataclasses import dataclass
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "segments"
 
+
 # Character segment definition
 @dataclass(frozen=True)
 class CharacterSegment:
-    box: tuple[int, int, int, int] # coordinates
-    uncertain: bool = False        # True if uncertain, False if not
-    reason: str = ""               # Explain the meaning of segmentation
+    box: tuple[int, int, int, int]  # coordinates
+    uncertain: bool = False  # True if uncertain, False if not
+    reason: str = ""  # Explain the meaning of segmentation
 
 
 def _segment_center_y(segment):
     return (segment.box[1] + segment.box[3]) / 2
+
 
 # Segments division in lines
 def group_segments_into_lines(segments):
@@ -30,7 +32,7 @@ def group_segments_into_lines(segments):
 
     # Typical height computation
     heights = [max(1, segment.box[3] - segment.box[1]) for segment in segments]
-    typical_height = float(np.median(heights)) 
+    typical_height = float(np.median(heights))
     # ch ordering top to bottom and left to right
     ordered_segments = sorted(
         segments,
@@ -84,6 +86,7 @@ def group_segments_into_lines(segments):
 
     return lines
 
+
 # Phrase division into words
 def _group_line_segments_into_words(segments):
     if len(segments) <= 1:
@@ -108,7 +111,7 @@ def _group_line_segments_into_words(segments):
     # Gap threshold definition
     word_gap_threshold = max(
         typical_width * 0.60,
-        typical_letter_gap * 1.80,
+        typical_letter_gap * 1.30,
     )
     groups = [[segments[0]]]
 
@@ -120,6 +123,7 @@ def _group_line_segments_into_words(segments):
             groups[-1].append(current)
 
     return groups
+
 
 # Combination of previous steps
 def group_segments_into_text(segments):
@@ -136,7 +140,7 @@ def group_segments_into_text(segments):
 
 
 def group_segments_into_words(segments):
-    
+
     return [word for line in group_segments_into_text(segments) for word in line]
 
 
@@ -147,10 +151,11 @@ def parse_arguments():
 
     return parser.parse_args()
 
+
 # Dots and small marks management
 def _merge_diacritics(components, minimum_area, minimum_height):
     main_components = []
-    small_components = [] 
+    small_components = []
     minimum_small_area = max(3, round(minimum_area * 0.20))
 
     for component in components:
@@ -207,7 +212,7 @@ def _merge_diacritics(components, minimum_area, minimum_height):
         if best_index is None:
             continue
 
-        # If a match is found, increase main component box dimensions 
+        # If a match is found, increase main component box dimensions
         # including the dot/mark
         main = main_components[best_index]
         left = min(main["x"], small["x"])
@@ -231,10 +236,11 @@ def _merge_diacritics(components, minimum_area, minimum_height):
 
     return main_components
 
+
 # Character end finding
 def _find_split_column(binary, box, typical_width):
-    # This function is needed when two letters are close and 
-    # OpenCV sees them togheter 
+    # This function is needed when two letters are close and
+    # OpenCV sees them togheter
     left, top, right, bottom = box
     component = binary[top:bottom, left:right] > 0
     height, width = component.shape
@@ -309,6 +315,7 @@ def _find_split_column(binary, box, typical_width):
     candidates.sort()
     return left + candidates[0][4]
 
+
 # Wide component splitting
 def _split_wide_component(
     binary,
@@ -329,7 +336,7 @@ def _split_wide_component(
     height = bottom - top
 
     width_limit = max(
-        height * 1.15,
+        height * 1.35,
         typical_width * 1.35,
     )
 
@@ -367,6 +374,7 @@ def _split_wide_component(
         depth=depth + 1,
     )
 
+
 # Small margin adding (8% of max dim) in box environment
 def _pad_box(box, image_width, image_height):
     left, top, right, bottom = box
@@ -380,6 +388,7 @@ def _pad_box(box, image_width, image_height):
         min(image_width, right + padding),
         min(image_height, bottom + padding),
     )
+
 
 # Line height estimation
 def _estimate_text_line_height(binary):
@@ -411,8 +420,14 @@ def _estimate_text_line_height(binary):
 
     return max(1, round(float(np.median(significant_spans))))
 
+
 # Main function
-def segment_characters(image):
+def segment_characters(image, choose_split=None):
+    """Segment ink; an optional callback can reject proposed wide-letter cuts.
+
+    The callback receives a padded whole CharacterSegment and padded parts,
+    and returns True to accept the split. Without it, geometry decides alone.
+    """
     # Image conversion to gray
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -432,14 +447,8 @@ def segment_characters(image):
     binary[:, :2] = 0
     binary[:, -2:] = 0
 
-    # Possible small interruptions joint
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    binary = cv2.morphologyEx(
-        binary,
-        cv2.MORPH_CLOSE,
-        kernel,
-        iterations=1,
-    )
+    # Preserve narrow gaps between letters. A 3x3 closing can join distinct
+    # characters in small images before connected-component detection.
 
     component_count, _, statistics, _ = cv2.connectedComponentsWithStats(
         binary,
@@ -521,13 +530,18 @@ def segment_characters(image):
 
     # Wide components splitting
     for box in raw_boxes:
-        split_boxes.extend(
-            _split_wide_component(
-                binary,
-                box,
-                typical_width,
-            )
-        )
+        parts = _split_wide_component(binary, box, typical_width)
+        if len(parts) > 1 and choose_split is not None:
+            whole = CharacterSegment(_pad_box(box, image_width, image_height))
+            alternatives = [
+                CharacterSegment(
+                    _pad_box(part_box, image_width, image_height), uncertain, reason
+                )
+                for part_box, uncertain, reason in parts
+            ]
+            if not choose_split(whole, alternatives):
+                parts = [(box, False, "")]
+        split_boxes.extend(parts)
 
     # Boxes ordered left to right
     split_boxes.sort(key=lambda item: item[0][0])
@@ -546,6 +560,7 @@ def segment_characters(image):
     ]
 
     return binary, segments  # Binary: Image for debug; segments: found ch
+
 
 # Debug or use from terminal
 def save_results(image, binary, boxes, output_dir):
@@ -596,9 +611,10 @@ def save_results(image, binary, boxes, output_dir):
         annotated_image,
     )
 
+
 # Main allows to use this file directly from terminal
 def main():
-    
+
     # Arguments reading
     arguments = parse_arguments()
 

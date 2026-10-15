@@ -35,6 +35,7 @@ def load_qt():
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import (
             QApplication,
+            QBoxLayout,
             QFileDialog,
             QFrame,
             QGridLayout,
@@ -46,6 +47,9 @@ def load_qt():
             QMainWindow,
             QMessageBox,
             QPushButton,
+            QPlainTextEdit,
+            QScrollArea,
+            QSizePolicy,
             QTableWidget,
             QTableWidgetItem,
             QVBoxLayout,
@@ -61,6 +65,7 @@ def load_qt():
         Qt=Qt,
         QPixmap=QPixmap,
         QApplication=QApplication,
+        QBoxLayout=QBoxLayout,
         QFileDialog=QFileDialog,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
@@ -72,6 +77,9 @@ def load_qt():
         QMainWindow=QMainWindow,
         QMessageBox=QMessageBox,
         QPushButton=QPushButton,
+        QPlainTextEdit=QPlainTextEdit,
+        QScrollArea=QScrollArea,
+        QSizePolicy=QSizePolicy,
         QTableWidget=QTableWidget,
         QTableWidgetItem=QTableWidgetItem,
         QVBoxLayout=QVBoxLayout,
@@ -85,7 +93,8 @@ def build_main_window(qt, recognizer, initial_image=None):
             super().__init__("No image loaded")
             self.source_pixmap = None
             self.setAlignment(qt.Qt.AlignCenter)
-            self.setMinimumSize(720, 360)
+            self.setMinimumSize(160, 120)
+            self.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Expanding)
             self.setFrameShape(qt.QFrame.NoFrame)
             self.setStyleSheet(
                 "QLabel { background: #f8fafc; border: 1px solid #d0d7de; "
@@ -122,7 +131,6 @@ def build_main_window(qt, recognizer, initial_image=None):
         def __init__(self):
             super().__init__()
             self.setWindowTitle("Handwritten Text OCR")
-            self.resize(1360, 820)
             self.setStyleSheet("""
                 QMainWindow, QWidget { background: #f3f4f6; color: #111827; }
                 QLineEdit { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; }
@@ -141,11 +149,27 @@ def build_main_window(qt, recognizer, initial_image=None):
             self.correction_banner.setAlignment(qt.Qt.AlignCenter)
             self.correction_banner.setMinimumHeight(82)
             self.correction_banner.setWordWrap(True)
-            self.raw_text_label = MetricLabel()
+            self.raw_text_label = qt.QPlainTextEdit()
+            self.raw_text_label.setReadOnly(True)
+            self.raw_text_label.setLineWrapMode(qt.QPlainTextEdit.NoWrap)
+            self.raw_text_label.setStyleSheet(
+                "QPlainTextEdit { background: #f8fafc; border: 0; "
+                "font-weight: 600; color: #111827; }"
+            )
+            self.raw_text_label.setFixedHeight(
+                self.raw_text_label.fontMetrics().height() + 16
+            )
+            self.raw_text_label.setVerticalScrollBarPolicy(qt.Qt.ScrollBarAsNeeded)
+            self.raw_text_label.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAsNeeded)
+            self.raw_text_label.horizontalScrollBar().rangeChanged.connect(
+                self._resize_raw_text
+            )
+            self.raw_text_label.setPlainText("-")
             self.language_label = MetricLabel()
             self.status_label = MetricLabel()
             self.confidence_label = MetricLabel()
             self.suggestions_label = MetricLabel()
+            self.suggestions_label.setWordWrap(True)
             self.detected_text_label = qt.QLabel("-")
             self.detected_text_label.setAlignment(qt.Qt.AlignCenter)
             self.detected_text_label.setWordWrap(True)
@@ -169,7 +193,7 @@ def build_main_window(qt, recognizer, initial_image=None):
             self.character_table.setColumnWidth(4, 96)
             self.character_table.setColumnWidth(5, 84)
             header.setStretchLastSection(False)
-            self.character_table.setMinimumHeight(320)
+            self.character_table.setMinimumHeight(140)
             self.character_table.setMaximumHeight(430)
 
             if initial_image:
@@ -208,7 +232,14 @@ def build_main_window(qt, recognizer, initial_image=None):
 
             detected_text_box = qt.QGroupBox("Detected Text")
             detected_text_layout = qt.QVBoxLayout()
-            detected_text_layout.addWidget(self.detected_text_label)
+            detected_text_scroll = qt.QScrollArea()
+            detected_text_scroll.setWidgetResizable(True)
+            detected_text_scroll.setMinimumHeight(90)
+            detected_text_scroll.setMaximumHeight(150)
+            detected_text_scroll.setFrameShape(qt.QFrame.NoFrame)
+            detected_text_scroll.setWidget(self.detected_text_label)
+            self.detected_text_label.setMinimumWidth(0)
+            detected_text_layout.addWidget(detected_text_scroll)
             detected_text_box.setLayout(detected_text_layout)
             self.detected_text_label.setStyleSheet(
                 "background: #f8fafc; color: #111827; border: 1px solid #d0d7de; "
@@ -221,26 +252,71 @@ def build_main_window(qt, recognizer, initial_image=None):
             side_layout.addWidget(table_box, 1)
             side_layout.addWidget(detected_text_box)
 
-            content_layout = qt.QHBoxLayout()
-            content_layout.setSpacing(16)
-            content_layout.addWidget(image_box, 3)
+            self.content_layout = qt.QBoxLayout(qt.QBoxLayout.LeftToRight)
+            self.content_layout.setSpacing(16)
+            self.content_layout.addWidget(image_box, 3)
             side_widget = qt.QWidget()
             side_widget.setLayout(side_layout)
-            content_layout.addWidget(side_widget, 2)
+            self.content_layout.addWidget(side_widget, 2)
 
             main_layout = qt.QVBoxLayout()
             main_layout.setContentsMargins(14, 14, 14, 14)
             main_layout.setSpacing(12)
             main_layout.addLayout(top_bar)
-            main_layout.addLayout(content_layout, 1)
+            main_layout.addLayout(self.content_layout, 1)
 
             container = qt.QWidget()
             container.setLayout(main_layout)
-            self.setCentralWidget(container)
+            self.page_scroll = qt.QScrollArea()
+            self.page_scroll.setWidgetResizable(True)
+            self.page_scroll.setFrameShape(qt.QFrame.NoFrame)
+            self.page_scroll.setWidget(container)
+            self.setCentralWidget(self.page_scroll)
+            self._screen_connected = False
+            self._fit_to_screen(self.screen(), initial=True)
 
             self._set_banner_idle()
             self.browse_button.clicked.connect(self.browse_image)
             self.analyze_button.clicked.connect(self.analyze_image)
+
+        def _resize_raw_text(self, minimum, maximum):
+            scrollbar_height = (
+                self.raw_text_label.horizontalScrollBar().sizeHint().height()
+                if maximum > 0
+                else 0
+            )
+            self.raw_text_label.setFixedHeight(
+                self.raw_text_label.fontMetrics().height() + 16 + scrollbar_height
+            )
+
+        def _fit_to_screen(self, screen, initial=False):
+            if screen is None or self.isMaximized():
+                return
+            available = screen.availableGeometry()
+            width = min(
+                1360 if initial else self.width(), int(available.width() * 0.90)
+            )
+            height = min(
+                820 if initial else self.height(), int(available.height() * 0.90)
+            )
+            self.resize(width, height)
+            if initial:
+                self.move(available.center() - self.rect().center())
+
+        def showEvent(self, event):
+            super().showEvent(event)
+            if not self._screen_connected and self.windowHandle() is not None:
+                self.windowHandle().screenChanged.connect(self._fit_to_screen)
+                self._screen_connected = True
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            if hasattr(self, "content_layout"):
+                self.content_layout.setDirection(
+                    qt.QBoxLayout.TopToBottom
+                    if self.width() < 1000
+                    else qt.QBoxLayout.LeftToRight
+                )
 
         def _set_banner_idle(self):
             self.correction_banner.setText("Load an image to analyze handwriting")
@@ -300,7 +376,12 @@ def build_main_window(qt, recognizer, initial_image=None):
                 return
 
             self._set_banner_for_result(result)
-            self.raw_text_label.setText(result.raw_text)
+            self.raw_text_label.setPlainText(result.raw_text)
+            self.raw_text_label.setVerticalScrollBarPolicy(
+                qt.Qt.ScrollBarAlwaysOn
+                if "\n" in result.raw_text
+                else qt.Qt.ScrollBarAsNeeded
+            )
             self.language_label.setText(result.detected_language)
             self.status_label.setText(result.spelling_status)
             self.confidence_label.setText(f"{result.average_confidence:.2%}")
