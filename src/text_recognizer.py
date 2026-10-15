@@ -41,6 +41,7 @@ LOCAL_CHECKPOINT = PROJECT_ROOT / "models" / "best_ch_cnn_local_words.pt"
 DEFAULT_QT_CHECKPOINT = (
     LOCAL_CHECKPOINT if LOCAL_CHECKPOINT.exists() else DEFAULT_CHECKPOINT
 )
+SEGMENT_SPLIT_PENALTY = 0.15
 
 """
 ------------------------------------------------------
@@ -53,6 +54,8 @@ For each ch stores:
 - Alternatives if uncertain on the prediction
 ------------------------------------------------------
 """
+
+
 @dataclass(frozen=True)
 class CharacterPrediction:
     position: int
@@ -65,6 +68,7 @@ class CharacterPrediction:
     word_index: int = 1
     word_position: int = 1
 
+
 """
 ------------------------------------------------------
 This class represents the recognized word
@@ -72,6 +76,8 @@ This class represents the recognized word
 - final_word: word after revision
 ------------------------------------------------------
 """
+
+
 @dataclass(frozen=True)
 class WordRecognitionResult:
     raw_word: str
@@ -85,11 +91,14 @@ class WordRecognitionResult:
     character_predictions: list[CharacterPrediction]
     uncertain_positions: list[int]
 
+
 """
 ------------------------------------------------------
 This class represents the whole text
 ------------------------------------------------------
 """
+
+
 @dataclass(frozen=True)
 class TextRecognitionResult:
     raw_text: str
@@ -105,11 +114,14 @@ class TextRecognitionResult:
     word_results: list[WordRecognitionResult]
     line_count: int
 
+
 """
 ------------------------------------------------------
 This class represents the text_recognizer
 ------------------------------------------------------
 """
+
+
 class TextRecognizer:
     def __init__(
         self,
@@ -231,10 +243,38 @@ class TextRecognizer:
         return canvas
 
     # Characters prediction
+    def _choose_character_split(self, image, whole, parts):
+        """Compare average log confidence with a cost for additional cuts."""
+        tensors = []
+        for segment in [whole, *parts]:
+            left, top, right, bottom = segment.box
+            tensor, _ = preprocess_character(
+                image[top:bottom, left:right], trim_connectors=True
+            )
+            tensors.append(tensor)
+        with torch.inference_mode():
+            scores = (
+                F.log_softmax(self.model(torch.cat(tensors).to(self.device)), dim=1)
+                .max(dim=1)
+                .values.cpu()
+            )
+        split_score = scores[1:].mean().item() - SEGMENT_SPLIT_PENALTY * (
+            len(parts) - 1
+        )
+        return split_score > scores[0].item()
+
+    def _segment_image(self, image):
+        return segment_characters(
+            image,
+            choose_split=lambda whole, parts: self._choose_character_split(
+                image, whole, parts
+            ),
+        )
+
     def _predict_segments(
         self,
         image,
-        segments, # List of detected ch
+        segments,  # List of detected ch
         start_position=1,
         line_index=1,
         word_index=1,
@@ -434,7 +474,7 @@ class TextRecognizer:
         if image is None:
             raise ValueError(f"Unable to read image: {image_path}")
 
-        binary, segments = segment_characters(image)
+        binary, segments = self._segment_image(image)
         output_dir = self.output_dir / image_path.stem
         output_dir.mkdir(parents=True, exist_ok=True)
         annotated_image_path = output_dir / "word_prediction.png"
@@ -476,7 +516,7 @@ class TextRecognizer:
             raise ValueError(f"Unable to read image: {image_path}")
 
         # ch segmentation
-        binary, segments = segment_characters(image)
+        binary, segments = self._segment_image(image)
         # group ch in lines and words. Every word is a list of segments
         text_layout = group_segments_into_text(segments)
         word_groups = [word for line in text_layout for word in line]

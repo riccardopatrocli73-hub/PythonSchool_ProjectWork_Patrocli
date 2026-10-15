@@ -1,4 +1,4 @@
-""" OCR recognized word correction """
+"""OCR recognized word correction"""
 
 import math
 import re
@@ -11,11 +11,12 @@ from symspellpy import SymSpell, Verbosity
 from src.alphabet import LETTERS
 
 # Wheights used for ranking
-EDIT_DISTANCE_WEIGHT = 6.0              # Penalizes words far to read one
-OCR_LOG_PROBABILITY_WEIGHT = 1.0        # Reward OCR likely words 
-DICTIONARY_FREQUENCY_WEIGHT = 0.20      # Reward frequent words
-CHARACTER_ORDER_WEIGHT = 3.0            # Reward similar words
-LENGTH_DIFFERENCE_WEIGHT = 0.25         # Penalizes different length words
+EDIT_DISTANCE_WEIGHT = 6.0  # Penalizes words far to read one
+OCR_LOG_PROBABILITY_WEIGHT = 1.0  # Reward OCR likely words
+DICTIONARY_FREQUENCY_WEIGHT = 0.20  # Reward frequent words
+CHARACTER_ORDER_WEIGHT = 3.0  # Reward similar words
+LENGTH_DIFFERENCE_WEIGHT = 0.25  # Penalizes different length words
+
 
 # OCR word definition
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class SpellingSuggestion:
     frequency: int
     ocr_log_probability: float
 
+
 # Final correction result
 @dataclass(frozen=True)
 class CorrectionResult:
@@ -46,6 +48,7 @@ class CorrectionResult:
     is_correct: bool
     correction: str | None
     suggestions: list[SpellingSuggestion]
+
 
 # Word normalization to compare with dictionary
 def normalize_word(word):
@@ -60,7 +63,25 @@ def normalize_word(word):
 
     return re.sub(r"[^a-z]", "", normalized)
 
+
 # Different words building from model top-k predicitons
+def word_edit_distance(left, right):
+    """Levenshtein distance between two normalized spellings."""
+    previous = list(range(len(right) + 1))
+    for row, left_character in enumerate(left, start=1):
+        current = [row]
+        for column, right_character in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column] + 1,
+                    previous[column - 1] + (left_character != right_character),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
 def build_ocr_candidates(
     top_probabilities,
     top_labels,
@@ -106,6 +127,7 @@ def build_ocr_candidates(
         beams = expanded[:beam_width]
 
     return beams
+
 
 # Corrector
 class ItalianSpellCorrector:
@@ -205,7 +227,9 @@ class ItalianSpellCorrector:
 
                 parts = stripped.rsplit(maxsplit=1)
                 surface = stripped
-                frequency = self.custom_frequency  # custom_frequency = 10000000 -> Custom words are more relevant
+                frequency = (
+                    self.custom_frequency
+                )  # custom_frequency = 10000000 -> Custom words are more relevant
 
                 if len(parts) == 2:
                     try:
@@ -312,12 +336,14 @@ class ItalianSpellCorrector:
     # Main function
     def correct(
         self,
-        raw_word,               # Best model read word
-        ocr_candidates,         # Alternatives
+        raw_word,  # Best model read word
+        ocr_candidates,  # Alternatives
         suggestion_limit=3,
     ):
         normalized_raw = normalize_word(raw_word)
-        raw_is_correct = normalized_raw in self.engine.words  # Check if raw_word in dict
+        raw_is_correct = (
+            normalized_raw in self.engine.words
+        )  # Check if raw_word in dict
 
         candidate_scores = {}
 
@@ -337,7 +363,7 @@ class ItalianSpellCorrector:
                 candidate.log_probability,
             )
 
-        collected = {}    # Set of possible suggestions
+        collected = {}  # Set of possible suggestions
 
         for normalized, ocr_score in candidate_scores.items():
             if normalized in self.engine.words:
